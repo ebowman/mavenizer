@@ -1,0 +1,120 @@
+Mavenizer README
+14 July 2011
+Eric Bowman
+
+This is a tool for creating robust poms of the individual OFBiz artifacts,
+and assembling artifacts to deploy to a Nexus repository.
+
+1. YOU MUST START WITH A CLEAN BUILD. This process modifies the ofbiz jars
+(by adding things to them that need to be on the class path), so do:
+
+    ant clean build
+    
+EVERY TIME, before you do this.
+
+2. Let's call the ofbiz directory, ${ofbiz.home}.  
+
+3. Everytime we mavenize, we need to decide on a version for all these artifacts.
+You may keep using the same version, but it's not recommended, since there is no
+good way for everyone to flush their local maven repository. You probably
+want to tag this version in source control as well.  The file
+${ofbiz.home}/ofbiz.version is a textfile that holds the ofbiz version; you'll need
+to create that file if it doesn't exist, and update it so that this process can use
+the value it finds in that file. If you are working against a pristeen OFBiz
+version, it might just be that version (e.g., 10.04). If you have made changes,
+you probably wish to give it your own version.
+
+4. Next, create a config file that has two things, the location of ${ofbiz.home},
+and the URL to the Nexus Lucene search API.  Something like this:
+
+    ofbiz {
+        home = "/Users/ebowman/tomtom/dps/ofbiz"
+    }
+
+    nexus {
+        searchUrl = "http://nlsrvup-nex01:8082/nexus/service/local/lucene/search?"
+        deployUrl = "http://nlsrvup-nex01:8082/nexus/content/repositories/thirdparty"
+        repositoryUrl = "http://nlsrvup-nex01:8082/nexus/content/groups/public"
+        repositoryId = "central"
+    }
+
+Hopefully you can figure out URLs that work against your Nexus server.  The repositoryId
+should map to a repository in your settings.xml file, which supplies credentials to use
+nexus.
+
+5. First, we need to make sure that all of the ofbiz external dependencies (in
+its various lib directories) are in Nexus. To do this, you run the Java application
+"com.tomtom.dps.mavenizer.graph.DependencyDeployer", passing the path to your config
+file as the first argument.
+
+This program will scan the ${ofbiz.home} directory, looking for jars which are not
+already in Nexus, and will interrogate Nexus in order to to generate the maven
+deploy:deploy-file commands to missing jars into Nexus with a reasonable
+groupId/artifactId/version.  In some cases it will present several possibilities.
+Basically you should go through what this program prints out, cherry pick the commands
+you want to run, and then run them as a bash script, to deploy missing OFBiz external
+dependencies to Nexus.
+
+The deploy commands look something like:
+
+    # For antisamy-bin.1.2.jar there are 2 possibilities
+    mvn deploy:deploy-file -DartifactId=antisamy -DgroupId=org.owasp.antisamy -Dversion=1.2 \
+        -Dfile=/Users/ebowman/tomtom/dps/ofbiz/framework/base/lib/antisamy-bin.1.2.jar \
+        -Durl=http://nlsrvup-nex01:8082/nexus/content/repositories/thirdparty \
+        -DrepositoryId=central -Dpackaging=jar
+    mvn deploy:deploy-file -DartifactId=antisamy -DgroupId=org.owasp -Dversion=1.2 \
+        -Dfile=/Users/ebowman/tomtom/dps/ofbiz/framework/base/lib/antisamy-bin.1.2.jar \
+        -Durl=http://nlsrvup-nex01:8082/nexus/content/repositories/thirdparty \
+        -DrepositoryId=central -Dpackaging=jar
+
+You can run the program like:
+
+    mvn -o install exec:java \
+        -Dexec.mainClass=com.tomtom.dps.mavenizer.dependency.DependencyDeployer \
+        -Dexec.args=/Users/ebowman/tomtom/dps/my.config
+
+6. Once everything is in Nexus, you can run a different program,
+com.tomtom.dps.mavenizer.dependency.PomGenerator.  By default, this program
+will check again that everything is in Nexus; you can skip this step by
+including --skip-nexus-check on the command line (since that check takes a few
+minutes).  The app expects the first argument to be the path to your config file.
+
+This program will generate a pom.xml file for each module in OFBiz, that
+contains a proper set of dependencies in the pom, that includes both the
+external dependencies (as found in the module's lib directory), as well as the
+dependencies within OFBiz itself.
+
+As it generates pom.xml files, it also generates src.jar files, and prints out
+the maven deploy:deploy-file commands to deploy the jar files themselves, their
+poms, and their associated source files.
+
+This program will also scan the various ofbiz-module.xml files in order to find
+things that a particular module needs on the command line, but which are not in
+the jar.  It will add them to the jar (which is why you need to do a clean build
+each time -- the program is not (unfortunately) idempotent.)
+
+Unlike the previous step, these commands should work as-is, assuming your
+configuration is correct.  When it's done, the poms are in place (and should
+be checked in), and you can run the commands it spit out to deploy the jars
+to Nexus.
+
+The program also create a compressed tarball of the entire ${ofbiz.home} directory,
+excluding .jar and .class files, and prints out the command to deploy it to Nexus.
+
+You can run the program like:
+
+    mvn -o install exec:java -Dexec.mainClass=com.tomtom.dps.mavenizer.dependency.PomGenerator \
+        -Dexec.args="/Users/ebowman/tomtom/dps/my.config --skip-nexus-check"
+
+The program will spit out lines like:
+
+# Writing /Users/ebowman/tomtom/dps/ofbiz/framework/example/pom.xml
+mvn deploy:deploy-file -Dfile=/Users/ebowman/tomtom/dps/ofbiz/framework/example/build/lib/ofbiz-example.jar \
+    -DpomFile=/Users/ebowman/tomtom/dps/ofbiz/framework/example/pom.xml \
+    -Durl=http://nlsrvup-nex01:8082/nexus/content/repositories/thirdparty \
+    -DrepositoryId=central -Dpackaging=jar
+mvn deploy:deploy-file -Dfile=/Users/ebowman/tomtom/dps/ofbiz/framework/example/src.jar \
+    -DpomFile=/Users/ebowman/tomtom/dps/ofbiz/framework/example/pom.xml \
+    -Durl=http://nlsrvup-nex01:8082/nexus/content/repositories/thirdparty \
+    -DrepositoryId=central -Dpackaging=jar -Dclassifier=sources
+
